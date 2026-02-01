@@ -1,0 +1,26 @@
+{
+    "br": {
+        "param": "region_id",
+        "regions": ["nss", "nssns3", "nssns4", "nst", "nsv"]
+    },
+    "au": {
+        "param": "region_id",
+        "regions": ["2023006", "2023004", "2023003", "2023002", "20230009", "20230008", "20230007", "20230006", "20230004", "20230003"]
+    },
+    "ca_en": {
+        "param": "region_id",
+        "regions": ["nc1fed", "nc1mth", "nc3fed", "nc3mth", "nb"]
+    },
+    "ca_fr": {
+        "param": "region_id",
+        "regions": ["nc1fed", "nc1mth", "nc3fed", "nc3mth", "nb"]
+    },
+    "vn": {
+        "param": "region_id",
+        "regions": ["aya", "ayb", "ayc"]
+    },
+    "in": {
+        "param": "region_id",
+        "regions": ["a1d", "a1g", "a1h,", "a6h", "adc", "add", "ade", "adf", "adg", "adh", "adj", "adk", "adl", "adm", "adn", "ado", "adq", "adr", "aey", "afr", "agh", "agp", "agx", "agy", "agz", "ah6", "ah8", "ah9", "aha", "ahb", "ahc", "ahd", "ahe", "ahf", "ahy", "ail", "aj6", "ajh", "akl", "aks", "als", "alz", "amm", "ani", "ank", "ann", "ao0", "aq0", "aq1", "aq2"]
+    }
+}
