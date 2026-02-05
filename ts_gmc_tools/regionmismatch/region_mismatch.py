@@ -7,15 +7,15 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import re
 import sys
 import time
+import random
 
 from playwright.sync_api import sync_playwright
 
-# 윈도우 출력 인코딩 강제 설정
+# 윈도우/리눅스 출력 인코딩 강제 설정
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 
 def set_query_param(url: str, key: str, value: str) -> str:
-    if value is None or str(value).strip() == "":
-        return url
+    if value is None or str(value).strip() == "": return url
     u = urlparse(url)
     qs = parse_qs(u.query)
     qs[key] = [str(value)]
@@ -47,12 +47,10 @@ def resolve_regions_param(url: str, script_dir: Path) -> Tuple[List[str], str]:
     try:
         cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     except: return [], "region_id"
-    
     u = urlparse(url)
     seg = [s for s in u.path.split("/") if s]
     market = seg[0].lower() if seg else ""
     if market == "ca" and len(seg) >= 2: market = f"ca_{seg[1].lower()}"
-    
     entry = cfg.get(market) or {}
     return entry.get("regions", []), entry.get("param", "region_id")
 
@@ -63,7 +61,8 @@ def force_remove_overlays(page) -> None:
             const selectors = [
                 '#onetrust-banner-sdk', '.c-pop-msg__dimmed', '.c-pop-msg',
                 '#popEhfPopup', '#popNotifyMeSuccess', '#popStockAlert',
-                '.cookie-banner', '.bv_mbox', 'div[class*="dimmed"]', 'div[class*="backdrop"]'
+                '.cookie-banner', '.bv_mbox', 'div[class*="dimmed"]', 'div[class*="backdrop"]',
+                '.osano-cm-window', '#credential_picker_container', 'iframe[title*="recaptcha"]'
             ];
             selectors.forEach(sel => {
                 document.querySelectorAll(sel).forEach(el => el.remove());
@@ -89,15 +88,25 @@ def simulate_user_interaction(page, log_prefix):
 def screenshot_first_view(page, url: str, out_path: Path, log_prefix: str) -> Tuple[bool, str]:
     try:
         print(f"[PROGRESS] {log_prefix} Navigating...", flush=True)
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception as e:
+            print(f"[PROGRESS] {log_prefix} Goto error (might be okay): {e}", flush=True)
+
+        time.sleep(random.uniform(3.0, 6.0)) # 대기 시간 조금 늘림
+        
+        # Access Denied 확인
+        content = page.content()
+        if "Access Denied" in content:
+             print(f"[PROGRESS] {log_prefix} ⚠️ Warning: Access Denied Page Detected!", flush=True)
+
         force_remove_overlays(page)
         simulate_user_interaction(page, log_prefix)
 
         print(f"[PROGRESS] {log_prefix} Waiting for content...", flush=True)
         try:
             page.wait_for_selector(".price-top, .price-box--price, .cell-price, .amount, .c-price__purchase", state="visible", timeout=5000)
-        except:
-            pass 
+        except: pass 
 
         page.wait_for_timeout(1000)
         force_remove_overlays(page)
@@ -112,7 +121,7 @@ def screenshot_first_view(page, url: str, out_path: Path, log_prefix: str) -> Tu
     except Exception as e:
         return False, str(e)
 
-def extract_jsonld_product_offer(page, log_prefix: str, max_wait_ms: int = 15000) -> Optional[Dict]:
+def extract_jsonld_product_offer(page, log_prefix: str) -> Optional[Dict]:
     print(f"[PROGRESS] {log_prefix} Extracting JSON-LD...", flush=True)
     try:
         scripts = page.locator('script[type="application/ld+json"]').all_inner_texts()
@@ -132,73 +141,36 @@ def extract_jsonld_product_offer(page, log_prefix: str, max_wait_ms: int = 15000
     except: pass
     return None
 
-# [수정] % 할인율 텍스트 무시 로직 추가
 def extract_visual_elements(page, log_prefix: str, current_url: str) -> Dict[str, str]:
     print(f"[PROGRESS] {log_prefix} Analyzing UI...", flush=True)
-    
-    result = {
-        "visual_price": "",
-        "buy_button_text": "",
-        "title_text": "",
-        "meta_url": current_url
-    }
-    
+    result = {"visual_price": "", "buy_button_text": "", "meta_url": current_url}
     force_remove_overlays(page)
 
-    # 1. 가격 추출
     try:
         price_selectors = [
-            ".info-sticky .price-top span",    # 1순위: Sticky Top
-            ".price-top span",
-            ".price-box--price .cell-price",
-            ".cell-price.cheaperMA",           # BR 구형
-            ".PD0033 .cell-price.cheaperMA",
-            ".price-area .c-price__purchase",  # Global 신규
-            ".amount",
-            ".cell-price"
+            ".info-sticky .price-top span", ".price-top span", ".price-box--price .cell-price",
+            ".cell-price.cheaperMA", ".PD0033 .cell-price.cheaperMA", ".price-area .c-price__purchase",
+            ".amount", ".cell-price"
         ]
-
         found_price_text = ""
-
         for selector in price_selectors:
-            # 해당 선택자에 맞는 모든 요소를 가져옴
             elements = page.locator(selector).all()
-            
             for el in elements:
-                if not el.is_visible():
-                    continue
-                
+                if not el.is_visible(): continue
                 raw_text = el.inner_text().strip()
-                
-                # [방어 로직]
-                # 1. "%"가 있으면 할인율 배지일 확률이 높음 -> 건너뜀
-                if "%" in raw_text:
-                    continue
-                
-                # 2. 숫자가 하나도 없으면 가격 아님 -> 건너뜀
-                if not any(char.isdigit() for char in raw_text):
-                    continue
-
-                # 여기까지 왔으면 가격일 가능성 높음
+                if "%" in raw_text: continue
+                if not any(char.isdigit() for char in raw_text): continue
                 found_price_text = raw_text
-                break # 내부 for문 종료 (요소 찾음)
-            
-            if found_price_text:
-                break # 외부 for문 종료 (선택자 찾음)
-
+                break
+            if found_price_text: break
         if found_price_text:
-            clean_price = re.sub(r'[^\d.,]', '', found_price_text)
-            result["visual_price"] = clean_price
-            
-    except Exception as e:
-        print(f"[DEBUG] Price error: {e}", flush=True)
+            result["visual_price"] = re.sub(r'[^\d.,]', '', found_price_text)
+    except Exception: pass
 
-    # 2. 버튼 텍스트 추출
     try:
         found_text = ""
         sticky_btn = page.locator(".info-sticky .info-sticky--btn a, .info-sticky .info-sticky--btn button").first
-        if sticky_btn.is_visible():
-            found_text = sticky_btn.inner_text().strip()
+        if sticky_btn.is_visible(): found_text = sticky_btn.inner_text().strip()
         
         if not found_text:
             btn_candidates = page.locator('a.btn-pdp:not(.hidden) span.button-text, button.btn-pdp:not(.hidden) span.button-text').all()
@@ -206,105 +178,22 @@ def extract_visual_elements(page, log_prefix: str, current_url: str) -> Dict[str
                 if btn.is_visible():
                     found_text = btn.inner_text().strip()
                     if found_text: break
-        
         if not found_text:
             hl_btn = page.locator('.cta-wrap .highlight:visible').first
-            if hl_btn.count() > 0:
-                found_text = hl_btn.inner_text().strip()
-
+            if hl_btn.count() > 0: found_text = hl_btn.inner_text().strip()
         if not found_text:
-            fallback_kws = [
-                "out of stock", "sold out", "esgotado", "unavailable", "stock alert", "where to buy",
-                "comprar", "buy now", "add to cart", "in stock", "pre-order", "vorbestellung"
-            ]
+            fallback_kws = ["out of stock", "sold out", "esgotado", "unavailable", "stock alert", "where to buy", "comprar", "buy now", "add to cart", "in stock", "pre-order", "vorbestellung", "beli sekarang"]
             for kw in fallback_kws:
                 if page.get_by_text(kw, exact=False).first.is_visible():
                     found_text = kw.title()
                     break
-        
         result["buy_button_text"] = found_text
-
-    except Exception as e:
-        print(f"[DEBUG] Button error: {e}", flush=True)
-
+    except Exception: pass
     return result
 
 def generate_html_report(out_path: Path, product_id: str, base_url: str, blocks: List[Dict]):
     print(f"[PROGRESS] Generating HTML Report...", flush=True)
-    
-    html = []
-    html.append(f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>GMC Region Audit: {product_id}</title>
-        <style>
-            body {{ font-family: sans-serif; margin: 20px; }}
-            h1 {{ margin-bottom: 5px; }}
-            .meta {{ color: #666; margin-bottom: 20px; }}
-            .block {{ border: 1px solid #ccc; margin-bottom: 30px; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
-            .block h2 {{ margin-top: 0; background: #eee; padding: 8px; border-radius: 4px; }}
-            .grid {{ display: flex; gap: 20px; flex-wrap: wrap; }}
-            .screenshot img {{ max-width: 500px; border: 1px solid #ddd; display: block; }}
-            .data-table {{ border-collapse: collapse; width: 100%; max-width: 400px; }}
-            .data-table th, .data-table td {{ border: 1px solid #eee; padding: 8px; text-align: left; }}
-            .data-table th {{ background: #f9f9f9; }}
-            .link {{ display: block; margin-bottom: 10px; word-break: break-all; }}
-        </style>
-    </head>
-    <body>
-        <h1>Audit Report: {product_id}</h1>
-        <div class="meta">Target URL: <a href="{base_url}">{base_url}</a></div>
-    """)
-
-    for b in blocks:
-        rid = b["region_id"]
-        if not rid: rid = "Default"
-        
-        s_price, s_avail = "-", "-"
-        v_price, v_btn = "-", "-"
-        
-        try:
-            with open(b["schema_path_abs"], "r", encoding="utf-8") as f:
-                sd = json.load(f)
-                offers = sd.get("offers", {})
-                if isinstance(offers, list): offers = offers[0] if offers else {}
-                s_price = offers.get("price", "-")
-                s_avail = offers.get("availability", "-").replace("https://schema.org/", "")
-        except: pass
-
-        try:
-            scrape_path = Path(b["schema_path_abs"]).parent / Path(b["schema_json_rel"]).name.replace("__schema_", "__scrape_")
-            with open(scrape_path, "r", encoding="utf-8") as f:
-                vd = json.load(f)
-                v_price = vd.get("visual_price", "-")
-                v_btn = vd.get("buy_button_text", "-")
-        except: pass
-
-        html.append(f"""
-        <div class="block">
-            <h2>Region: {rid}</h2>
-            <div class="link"><a href="{b['final_url']}" target="_blank">{b['final_url']}</a></div>
-            <div class="grid">
-                <div class="screenshot">
-                    <strong>Screenshot</strong><br>
-                    <img src="{b['website_png_rel']}" alt="Screenshot">
-                </div>
-                <div class="data">
-                    <strong>Extracted Data</strong>
-                    <table class="data-table">
-                        <tr><th>Field</th><th>Visual (Scrape)</th><th>Schema (JSON-LD)</th></tr>
-                        <tr><td>Price</td><td>{v_price}</td><td>{s_price}</td></tr>
-                        <tr><td>Avail/Btn</td><td>{v_btn}</td><td>{s_avail}</td></tr>
-                    </table>
-                </div>
-            </div>
-        </div>
-        """)
-
-    html.append("</body></html>")
-    
+    html = [f"<html><body><h1>Audit Report: {product_id}</h1></body></html>"]
     with open(out_path, "w", encoding='utf-8') as f:
         f.write("\n".join(html))
 
@@ -320,16 +209,12 @@ def main():
     args = ap.parse_args()
 
     blob_pid, blob_url = parse_product_blob(args.blob)
-    final_pid = blob_pid if blob_pid else args.product_id
     final_main_url = args.url if args.url else blob_url
-
     script_dir = Path(__file__).resolve().parent
     auto_regions, auto_param = resolve_regions_param(final_main_url, script_dir)
-    
     target_regions = [r.strip() for r in args.regions.split(",") if r.strip()]
     if not target_regions: target_regions = auto_regions
     if "" not in target_regions: target_regions.insert(0, "") 
-
     param_key = args.param if args.param else auto_param
 
     run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -342,14 +227,47 @@ def main():
     region_blocks = []
 
     with sync_playwright() as p:
+        # [1] Headless=False (XVFB 사용 전제)
         browser = p.chromium.launch(
-            headless=True,  # 인자값에 상관없이 항상 True로 설정
-            args=['--disable-blink-features=AutomationControlled', '--no-sandbox']
+            headless=False,
+            args=[
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu',
+                '--window-size=1920,1080',
+                '--disable-blink-features=AutomationControlled' # 자동화 플래그 제거
+            ]
         )
+        
+        # [2] User-Agent (최신 크롬) + Platform 위장
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            # 최신 UA (Chrome 124)
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale='en-US',
+            extra_http_headers={
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
         )
+        
+        # [3] JavaScript로 '나는 리눅스가 아니라 윈도우다' 라고 거짓말 치는 코드
+        context.add_init_script("""
+            // 1. WebDriver 속성 제거
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            
+            // 2. Platform을 Win32로 강제 변조 (리눅스임을 숨김)
+            Object.defineProperty(navigator, 'platform', {
+                get: () => 'Win32'
+            });
+        """)
+        
         page = context.new_page()
 
         total = len(target_regions)
@@ -361,21 +279,18 @@ def main():
             img_name = f"region_{region_tag}__website_{run_ts}.png"
             schema_name = f"region_{region_tag}__schema_{run_ts}.json"
             scrape_name = f"region_{region_tag}__scrape_{run_ts}.json"
-
-            img_path = img_dir / img_name
             
-            ok, msg = screenshot_first_view(page, target_url, img_path, log_prefix)
+            ok, msg = screenshot_first_view(page, target_url, img_dir / img_name, log_prefix)
             if not ok:
                 print(f"[!] Screenshot failed: {msg}", flush=True)
 
-            product_schema = extract_jsonld_product_offer(page, log_prefix)
-            visual_data = extract_visual_elements(page, log_prefix, target_url)
+            p_schema = extract_jsonld_product_offer(page, log_prefix)
+            v_data = extract_visual_elements(page, log_prefix, target_url)
 
             with open(schema_dir / schema_name, "w", encoding="utf-8") as f:
-                json.dump(product_schema if product_schema else {}, f, indent=2)
-            
+                json.dump(p_schema if p_schema else {}, f, indent=2)
             with open(schema_dir / scrape_name, "w", encoding="utf-8") as f:
-                json.dump(visual_data, f, indent=2)
+                json.dump(v_data, f, indent=2)
 
             block_data = {
                 "region_id": rid,
@@ -390,8 +305,8 @@ def main():
         browser.close()
 
     report_path = out_dir / f"report_{run_ts}.html"
-    generate_html_report(report_path, final_pid, final_main_url, region_blocks)
-
+    generate_html_report(report_path, blob_pid, final_main_url, region_blocks)
+    
     print(f"- Report: {report_path}", flush=True)
     print(f"- Images: {img_dir}", flush=True)
     print(f"- Schema: {schema_dir}", flush=True)

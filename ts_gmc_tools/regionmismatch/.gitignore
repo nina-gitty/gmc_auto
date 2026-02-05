@@ -1,0 +1,11 @@
+# 특정 파일 제외
+nohup.out
+
+# 리포트 파일들 (패턴 매칭)
+report_*.html
+region_*_website_*.png
+region_*_schema_*.json
+region_*_scrape_*.json
+
+# 또는 특정 폴더 전체를 제외하고 싶다면
+# outputs/
