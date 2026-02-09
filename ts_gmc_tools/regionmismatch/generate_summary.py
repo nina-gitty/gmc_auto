@@ -1,167 +1,157 @@
 import argparse
 import json
-from pathlib import Path
-from urllib.parse import urlparse
 import re
 import sys
+from pathlib import Path
 
-# [수정] 외부 JSON 로드 함수
-def load_translation_map():
-    # 스크립트와 같은 폴더에 있는 translations.json 찾기
-    script_dir = Path(__file__).resolve().parent
-    json_path = script_dir / "translations.json"
-    
-    if json_path.exists():
-        try:
-            return json.loads(json_path.read_text(encoding="utf-8"))
-        except:
-            return {"market_map": {}, "global_map": {}}
-    return {"market_map": {}, "global_map": {}}
+# 윈도우/리눅스 출력 인코딩 강제 설정
+sys.stdout.reconfigure(encoding='utf-8')
 
 def clean_currency(val):
     if not val: return ""
     return re.sub(r'[^\d.,]', '', str(val)).strip()
 
-def detect_market_from_url(url):
-    if not url: return "unknown"
+def safe_read_json(path):
     try:
-        u = urlparse(url)
-        path_parts = [p for p in u.path.split("/") if p]
-        if not path_parts: return "unknown"
-        
-        market = path_parts[0].lower()
-        if market == "ca" and len(path_parts) > 1:
-            if path_parts[1] in ["en", "fr"]:
-                market = f"ca_{path_parts[1]}"
-        elif market == "sa" and len(path_parts) > 1:
-             if path_parts[1] == "en": market = "sa_en"
-        elif market == "ae" and len(path_parts) > 1:
-             if path_parts[1] == "en": market = "ae_en"
-        elif market == "hk" and len(path_parts) > 1:
-             if path_parts[1] == "en": market = "hk_en"
-        elif market == "eg" and len(path_parts) > 1:
-             if path_parts[1] == "en": market = "eg_en"
-        
-        return market
+        return json.loads(path.read_text(encoding="utf-8"))
     except:
-        return "unknown"
+        return {}
 
-# [수정] JSON에서 로드한 맵을 인자로 받음
-def get_english_translation(text, market, trans_data):
+# [NEW] URL에서 국가 코드 추출 (예: lg.com/id/... -> id)
+def get_market_from_url(url):
+    try:
+        match = re.search(r'lg\.com/([a-z]{2}(?:_[a-z]{2})?)/', url)
+        if match:
+            return match.group(1)
+    except: pass
+    return "global"
+
+# [NEW] 번역 로직 (버튼 텍스트 -> 표준 상태값)
+def translate_status(text, market, trans_map):
     if not text: return ""
-    clean_text = str(text).lower().strip()
+    text_lower = text.lower().strip()
     
-    market_map = trans_data.get("market_map", {})
-    global_map = trans_data.get("global_map", {})
-
-    # 1. Market Specific Search
-    if market in market_map:
-        if clean_text in market_map[market]:
-            return market_map[market][clean_text]
-    
-    # 2. Global Fallback
-    for k, v in global_map.items():
-        if k in clean_text:
-            return v
+    # 1. 해당 국가 맵 확인
+    market_rules = trans_map.get("market_map", {}).get(market, {})
+    for k, v in market_rules.items():
+        if k in text_lower: return v
             
-    return ""
-
-def parse_regional_text(text):
-    mapping = {}
-    if not text: return mapping
-    text = text.replace("\\n", "\n")
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    for i in range(0, len(lines), 2):
-        if i + 1 < len(lines):
-            rid = lines[i]
-            val = lines[i+1]
-            mapping[rid] = val
-    return mapping
+    # 2. 글로벌 맵 확인
+    global_rules = trans_map.get("global_map", {})
+    for k, v in global_rules.items():
+        if k in text_lower: return v
+            
+    # 3. 매칭 안되면 원본 반환 (나중에 확인용)
+    return text
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--schema_dir", required=True)
     parser.add_argument("--mode", required=True, choices=["Price", "Availability"])
     parser.add_argument("--default_gmc", default="")
-    parser.add_argument("--regional_map_text", default="", help="Raw text for regional overrides")
+    parser.add_argument("--regional_map_text", default="")
     args = parser.parse_args()
 
     schema_dir = Path(args.schema_dir)
     if not schema_dir.exists():
-        print(json.dumps([]))
+        print("[]")
         return
 
-    # [수정] 번역 데이터 로드
-    trans_data = load_translation_map()
-    regional_overrides = parse_regional_text(args.regional_map_text)
-    summary_rows = []
+    # [1] Translation JSON 로드
+    trans_map = {}
+    try:
+        trans_file = Path(__file__).parent / "translation.json"
+        if trans_file.exists():
+            trans_map = json.loads(trans_file.read_text(encoding="utf-8"))
+    except: pass
 
-    for schema_file in sorted(schema_dir.glob("region_*__schema_*.json")):
-        filename = schema_file.name
-        try:
-            region_part = filename.split("__schema_")[0]
-            rid = region_part.replace("region_", "")
-            if rid == "default": rid = "Default (No Param)"
-        except:
-            rid = "Unknown"
+    # [2] Regional Map 파싱 (타임스탬프 무시 강화)
+    regional_map = {}
+    if args.regional_map_text:
+        raw_text = args.regional_map_text.replace("\t", "\n").replace("\r", "\n")
+        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
         
-        pure_rid = rid if rid != "Default (No Param)" else ""
-        target_gmc = regional_overrides.get(pure_rid, args.default_gmc)
-        if pure_rid == "" and not target_gmc: target_gmc = args.default_gmc
+        current_key = None
+        for line in lines:
+            # 날짜/시간 포맷 무시 (KST, GMT, 2026 등)
+            if any(x in line for x in ["KST", "GMT", "UTC", "AM", "PM"]) or re.search(r'\d{4}', line):
+                continue
 
-        # Load Schema
-        s_val = "-"
+            l_lower = line.lower()
+            # 상태값 키워드 확인
+            is_status = any(k in l_lower for k in ["in stock", "out of stock", "instock", "outofstock", "limited", "preorder"])
+            
+            if is_status:
+                if current_key:
+                    # GMC 값 표준화 (In stock -> InStock)
+                    std_val = "InStock" if "in" in l_lower and "stock" in l_lower else "OutOfStock"
+                    regional_map[current_key] = std_val
+                    current_key = None
+            else:
+                current_key = line
+
+    # [3] 파일 순회 및 데이터 취합
+    results = []
+    files = sorted(schema_dir.glob("*__schema_*.json"))
+    
+    for json_file in files:
         try:
-            with open(schema_file, 'r', encoding='utf-8') as f:
-                sd = json.load(f)
-                offers = sd.get("offers", {})
-                if isinstance(offers, list): offers = offers[0] if offers else {}
-                if args.mode == "Price":
-                    s_val = str(offers.get('price', '-'))
-                else:
-                    s_val = offers.get("availability", "-").replace("https://schema.org/", "")
-        except: pass
+            fname = json_file.name
+            parts = fname.split("__")
+            if len(parts) < 2: continue
+            
+            region_part = parts[0]
+            rid = region_part.replace("region_", "")
+            
+            display_rid = rid
+            lookup_key = rid
+            if rid == "default":
+                display_rid = "Default (No Param)"
+                lookup_key = ""
 
-        # Load Visual & URL
-        l_val = "-"
-        market_code = "unknown"
-        scrape_file = schema_dir / filename.replace("__schema_", "__scrape_")
-        if scrape_file.exists():
-            try:
-                with open(scrape_file, 'r', encoding='utf-8') as f:
-                    vd = json.load(f)
-                    meta_url = vd.get("meta_url", "")
-                    market_code = detect_market_from_url(meta_url)
-                    
-                    if args.mode == "Price":
-                        l_val = vd.get("visual_price", "-")
-                    else:
-                        l_val = vd.get("buy_button_text", "-")
-            except: pass
+            # Schema Data
+            schema_data = safe_read_json(json_file)
+            offers = schema_data.get("offers", {})
+            if isinstance(offers, list): offers = offers[0] if offers else {}
+            s_price = clean_currency(offers.get("price", ""))
+            s_avail = offers.get("availability", "").replace("https://schema.org/", "")
 
-        # Display Formatting
-        display_gmc = target_gmc
-        display_lg = l_val
-        display_schema = s_val
+            # Visual Data
+            scrape_fname = fname.replace("__schema_", "__scrape_")
+            scrape_file = json_file.parent / scrape_fname
+            visual_data = safe_read_json(scrape_file) if scrape_file.exists() else {}
+            
+            v_price = visual_data.get("visual_price", "")
+            raw_btn_text = visual_data.get("buy_button_text", "")
+            target_url = visual_data.get("meta_url", "")
 
-        if args.mode == "Price":
-            display_gmc = clean_currency(target_gmc)
-            display_lg = clean_currency(l_val)
-            display_schema = clean_currency(s_val)
-        else:
-            # [수정] 로드된 번역 데이터를 인자로 전달
-            eng_status = get_english_translation(l_val, market_code, trans_data)
-            if eng_status and l_val != "-":
-                display_lg = f"{l_val} ({eng_status})"
+            # [번역 수행]
+            market_code = get_market_from_url(target_url)
+            v_avail_translated = translate_status(raw_btn_text, market_code, trans_map)
 
-        summary_rows.append({
-            "Region": rid,
-            "GMC": display_gmc if display_gmc else "(empty)",
-            "LG.com (Visual)": display_lg,
-            "Schema": display_schema
-        })
+            # GMC 값 결정
+            gmc_val = args.default_gmc
+            # GMC Default 값도 표준화
+            if "in" in gmc_val.lower() and "stock" in gmc_val.lower(): gmc_val = "InStock"
+            elif "out" in gmc_val.lower(): gmc_val = "OutOfStock"
 
-    print(json.dumps(summary_rows))
+            if lookup_key:
+                for k, v in regional_map.items():
+                    if k.lower() == lookup_key.lower():
+                        gmc_val = v
+                        break
+            
+            row = {
+                "Region": display_rid,
+                "GMC": gmc_val,
+                "LG.com (Visual)": v_avail_translated if args.mode == "Availability" else v_price,
+                "Schema": s_avail if args.mode == "Availability" else s_price,
+            }
+            results.append(row)
+            
+        except: continue
+
+    print(json.dumps(results))
 
 if __name__ == "__main__":
     main()

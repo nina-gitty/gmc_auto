@@ -3,40 +3,41 @@
     "de": { "info wenn verfügbar": "OutOfStock", "jetzt kaufen": "InStock", "vorbestellung": "PreOrder" },
     "at": { "jetzt kaufen": "InStock", "ausverkauft": "OutOfStock" },
     "ch_de": { "jetzt kaufen": "InStock", "ausverkauft": "OutOfStock", "vorbestellung": "PreOrder" },
-    
     "fr": { "obtenir une alerte de stock": "OutOfStock", "acheter maintenant": "InStock", "précommande": "PreOrder" },
     "ca_fr": { "obtenir une alerte de stock": "OutOfStock", "acheter maintenant": "InStock", "précommande": "PreOrder", "backorder": "BackOrder" },
     "ch_fr": { "acheter dès maintenant": "InStock", "alerté sur le stock": "OutOfStock", "précommande": "PreOrder" },
     "ma": { "acheter dès maintenant": "InStock", "alerté sur le stock": "OutOfStock" },
-    
     "br": { "avise-me quando chegar": "OutOfStock", "comprar agora": "InStock", "comprar": "PreOrder", "pré-venda": "BackOrder" },
     "pt": { "comprar": "InStock", "obter alerta de stock": "OutOfStock" },
-    
     "es": { "comprar ahora": "InStock", "recibir alerta": "OutOfStock" },
     "mx": { "comprar ahora": "InStock", "obtener alerta de existencias": "OutOfStock", "pedido anticipado": "PreOrder" },
     "pa": { "comprar ahora": "InStock", "recibir alerta de existencias": "OutOfStock", "pre-venta": "PreOrder" },
     "pe": { "comprar ahora": "InStock", "recibe alerta de existencias": "OutOfStock", "pedido anticipado": "PreOrder" },
     "co": { "comprar ahora": "InStock", "alerta de disponibilidad": "OutOfStock" },
-    
     "id": { "beli sekarang": "InStock", "dapatkan notifikasi stok": "OutOfStock", "pre order": "PreOrder" },
     "tw": { "立即購買": "InStock", "貨到通知": "OutOfStock", "預購": "PreOrder" },
     "hk": { "立即購買": "InStock", "貨到提示": "OutOfStock", "預訂": "PreOrder" },
     "th": { "ช้อปเลย": "InStock", "แจ้งเตือนสต็อกสินค้า": "OutOfStock", "คำสั่งซื้อล่วงหน้า (pre-order)": "PreOrder" },
     "vn": { "mua ngay": "InStock", "thông báo có hàng": "OutOfStock" },
     "jp": { "今すぐ購入": "InStock", "入荷通知": "OutOfStock", "予約販売": "PreOrder" },
-    
     "cz": { "koupit nyní": "InStock", "upozornit při naskladnění": "OutOfStock" },
     "it": { "acquista ora": "InStock", "avvisami": "OutOfStock" },
     "se": { "köp nu": "InStock", "meddela": "OutOfStock", "förbeställ": "PreOrder" },
     "pl": { "kup teraz": "InStock", "powiadom mnie": "OutOfStock" },
     "hu": { "vegye meg most!": "InStock", "készletértesítés": "OutOfStock" },
     "tr": { "hemen satın alın": "InStock", "stok uyarısı al": "OutOfStock" },
-    "kz": { "купить сейчас": "InStock", "уведомить о наличии": "OutOfStock" },
-    
+    "kz": { "купить сейчас": "InStock", "уведо미ть о наличии": "OutOfStock" },
     "sa": { "اشترِ الآن": "InStock", "اشترِ الآن_oos": "OutOfStock" },
     "eg": { "اشتري الآن": "InStock", "الحصول على تنبيه بخصوص المخزون": "OutOfStock" }
   },
   "global_map": {
+    "buy now": "InStock",
+    "add to cart": "InStock",
+    "out of stock": "OutOfStock",
+    "sold out": "OutOfStock",
+    "get stock alert": "OutOfStock",
+    "pre-order": "PreOrder",
+    "backorder": "BackOrder",
     "esgotado": "OutOfStock"
   }
 }
