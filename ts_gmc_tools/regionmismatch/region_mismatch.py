@@ -86,40 +86,61 @@ def simulate_user_interaction(page, log_prefix):
     except: pass
 
 def screenshot_first_view(page, url: str, out_path: Path, log_prefix: str) -> Tuple[bool, str]:
-    try:
-        print(f"[PROGRESS] {log_prefix} Navigating...", flush=True)
+    # [수정] 최대 3번 재시도 (Retry) 로직 추가
+    max_retries = 3
+    success = False
+    
+    for attempt in range(1, max_retries + 1):
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            print(f"[PROGRESS] {log_prefix} Navigating (Attempt {attempt}/{max_retries})...", flush=True)
+            
+            # [수정] 타임아웃 90초로 증가 (네트워크 느림 대비)
+            page.goto(url, wait_until="domcontentloaded", timeout=90000)
+            
+            # 페이지가 떴으면 성공으로 간주하고 루프 탈출
+            success = True
+            break 
         except Exception as e:
-            print(f"[PROGRESS] {log_prefix} Goto error (might be okay): {e}", flush=True)
+            print(f"[PROGRESS] {log_prefix} ⚠️ Timeout/Error on attempt {attempt}: {e}", flush=True)
+            if attempt < max_retries:
+                print(f"[PROGRESS] {log_prefix} 🔄 Retrying in 5 seconds...", flush=True)
+                time.sleep(5)
+            else:
+                print(f"[PROGRESS] {log_prefix} ❌ Failed after {max_retries} attempts.", flush=True)
 
-        time.sleep(random.uniform(3.0, 6.0)) # 대기 시간 조금 늘림
-        
-        # Access Denied 확인
+    # 실패했더라도 스크린샷은 시도해봄 (에러 화면이라도 찍히게)
+    
+    time.sleep(random.uniform(2.0, 4.0)) # 봇 회피 대기
+    
+    # Access Denied 체크 (로그만)
+    try:
         content = page.content()
         if "Access Denied" in content:
              print(f"[PROGRESS] {log_prefix} ⚠️ Warning: Access Denied Page Detected!", flush=True)
+    except: pass
 
-        force_remove_overlays(page)
-        simulate_user_interaction(page, log_prefix)
+    force_remove_overlays(page)
+    simulate_user_interaction(page, log_prefix)
 
-        print(f"[PROGRESS] {log_prefix} Waiting for content...", flush=True)
-        try:
-            page.wait_for_selector(".price-top, .price-box--price, .cell-price, .amount, .c-price__purchase", state="visible", timeout=5000)
-        except: pass 
+    print(f"[PROGRESS] {log_prefix} Waiting for content...", flush=True)
+    try:
+        page.wait_for_selector(".price-top, .price-box--price, .cell-price, .amount, .c-price__purchase", state="visible", timeout=5000)
+    except: pass 
 
-        page.wait_for_timeout(1000)
-        force_remove_overlays(page)
+    page.wait_for_timeout(1000)
+    force_remove_overlays(page)
 
-        print(f"[PROGRESS] {log_prefix} Taking screenshot...", flush=True)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[PROGRESS] {log_prefix} Taking screenshot...", flush=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
         page.screenshot(path=str(out_path), full_page=False)
-
-        if not out_path.exists() or out_path.stat().st_size < 5000:
-            return False, "Screenshot error"
-        return True, "ok"
     except Exception as e:
-        return False, str(e)
+        return False, f"Screenshot failed: {e}"
+
+    if not out_path.exists() or out_path.stat().st_size < 1000:
+        return False, "Screenshot empty"
+    
+    return True, "ok"
 
 def extract_jsonld_product_offer(page, log_prefix: str) -> Optional[Dict]:
     print(f"[PROGRESS] {log_prefix} Extracting JSON-LD...", flush=True)
@@ -227,7 +248,7 @@ def main():
     region_blocks = []
 
     with sync_playwright() as p:
-        # [1] Headless=False (XVFB 사용 전제)
+        # [Headless=False + XVFB 조합]
         browser = p.chromium.launch(
             headless=False,
             args=[
@@ -240,32 +261,20 @@ def main():
                 '--single-process',
                 '--disable-gpu',
                 '--window-size=1920,1080',
-                '--disable-blink-features=AutomationControlled' # 자동화 플래그 제거
+                '--disable-blink-features=AutomationControlled'
             ]
         )
         
-        # [2] User-Agent (최신 크롬) + Platform 위장
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            # 최신 UA (Chrome 124)
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             locale='en-US',
-            extra_http_headers={
-                'Accept-Language': 'en-US,en;q=0.9',
-            }
+            extra_http_headers={'Accept-Language': 'en-US,en;q=0.9'}
         )
         
-        # [3] JavaScript로 '나는 리눅스가 아니라 윈도우다' 라고 거짓말 치는 코드
         context.add_init_script("""
-            // 1. WebDriver 속성 제거
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-            
-            // 2. Platform을 Win32로 강제 변조 (리눅스임을 숨김)
-            Object.defineProperty(navigator, 'platform', {
-                get: () => 'Win32'
-            });
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
         """)
         
         page = context.new_page()
@@ -280,9 +289,8 @@ def main():
             schema_name = f"region_{region_tag}__schema_{run_ts}.json"
             scrape_name = f"region_{region_tag}__scrape_{run_ts}.json"
             
-            ok, msg = screenshot_first_view(page, target_url, img_dir / img_name, log_prefix)
-            if not ok:
-                print(f"[!] Screenshot failed: {msg}", flush=True)
+            # 스크린샷 함수 내에서 재시도 로직 수행
+            screenshot_first_view(page, target_url, img_dir / img_name, log_prefix)
 
             p_schema = extract_jsonld_product_offer(page, log_prefix)
             v_data = extract_visual_elements(page, log_prefix, target_url)

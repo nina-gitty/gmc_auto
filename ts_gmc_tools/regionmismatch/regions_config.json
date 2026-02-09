@@ -5,7 +5,7 @@
     },
     "au": {
         "param": "region_id",
-        "regions": ["2023006", "2023004", "2023003", "2023002", "20230009", "20230008", "20230007", "20230006", "20230004", "20230003"]
+        "regions": ["20230003", "20230004", "20230006", "20230007", "2023002", "2023003", "2023004", "2023006"]
     },
     "ca_en": {
         "param": "region_id",
@@ -21,6 +21,6 @@
     },
     "in": {
         "param": "region_id",
-        "regions": ["a1d", "a1g", "a1h,", "a6h", "adc", "add", "ade", "adf", "adg", "adh", "adj", "adk", "adl", "adm", "adn", "ado", "adq", "adr", "aey", "afr", "agh", "agp", "agx", "agy", "agz", "ah6", "ah8", "ah9", "aha", "ahb", "ahc", "ahd", "ahe", "ahf", "ahy", "ail", "aj6", "ajh", "akl", "aks", "als", "alz", "amm", "ani", "ank", "ann", "ao0", "aq0", "aq1", "aq2"]
+        "regions": ["a1d","a1g","a1h","a6h","aey","ail","aj6", "ajh","akl","aks","als","alz","amm","ani","ank","ann","ark","at4","atf","atk","atm","atx","aud","auj","ayw","az5","az6","az9","azd"]
     }
 }
