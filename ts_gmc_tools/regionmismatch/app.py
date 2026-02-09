@@ -17,7 +17,7 @@ st.set_page_config(page_title="GMC Region Mismatch Audit Tool", layout="wide")
 
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "region_mismatch.py"
-TRANS_FILE = HERE / "translation.json"
+TRANS_FILE = HERE / "translations.json"
 
 # =========================================================
 # 1. Session State Initialization
@@ -41,6 +41,7 @@ if "running" not in st.session_state:
     st.session_state.returncode = None
     st.session_state.stdout_all = ""
     st.session_state.started_at = None
+    st.session_state.final_duration = None
 
 
 # =========================================================
@@ -53,9 +54,13 @@ st.markdown("""
     .comp-table th { text-align: left; color: #444; background-color: #f9fafb; border-bottom: 2px solid #eee; padding: 8px 12px; font-weight: 600; }
     .comp-table td { border-bottom: 1px solid #f0f0f0; padding: 10px 12px; vertical-align: top; color: #222; }
     div[data-testid="stTable"] table { border-radius: 8px; overflow: hidden; border: 1px solid #e0e0e0; }
-    .status-box { padding: 1rem; border-radius: 0.5rem; background-color: #e8f0fe; color: #1a73e8; border: 1px solid #d2e3fc; margin-bottom: 10px; }
-    .status-header { display: flex; align-items: center; margin-bottom: 8px; }
+    .status-box { padding: 1rem; border-radius: 0.5rem; border: 1px solid #d2e3fc; margin-bottom: 10px; transition: all 0.3s ease; }
+    .status-running { background-color: #e8f0fe; color: #1a73e8; border-color: #d2e3fc; }
+    .status-done { background-color: #e6fffa; color: #047481; border-color: #b2f5ea; }
+    .status-failed { background-color: #fff5f5; color: #c53030; border-color: #fed7d7; }
+    .status-header { display: flex; align-items: center; margin-bottom: 8px; font-weight: 600; font-size: 1rem; }
     .status-text { font-size: 0.9rem; color: #444; word-break: break-word; }
+    .time-text { font-size: 0.85rem; color: #666; margin-top: 5px; font-family: monospace; }
     .analysis-container { margin-top: 20px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f8f9fa; }
     </style>
     """, unsafe_allow_html=True)
@@ -210,7 +215,7 @@ def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
             display_rid = rid
             lookup_key = rid
             if rid == "default":
-                display_rid = "Default (No Param)"
+                display_rid = "Default"
                 lookup_key = ""
 
             schema_data = safe_read_json(json_file)
@@ -228,11 +233,7 @@ def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
             raw_btn_text = visual_data.get("buy_button_text", "")
             target_url = visual_data.get("meta_url", "")
 
-            # Translate
-            market_code = get_market_from_url(target_url)
-            v_avail_formatted = translate_status_with_format(raw_btn_text, market_code)
-
-            # GMC Value
+            # Determine GMC Value
             gmc_val = normalize_gmc_status(default_gmc)
             if lookup_key:
                 for k, v in regional_map.items():
@@ -240,14 +241,21 @@ def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
                         gmc_val = v
                         break
             
-            rows.append({
+            row_data = {
                 "Region": display_rid,
                 "GMC": gmc_val,
-                "Visual_Standard": v_avail_formatted.split('(')[0].strip() if '(' in v_avail_formatted else v_avail_formatted,
-                "Visual_Full": v_avail_formatted,
-                "Visual_Price": v_price,
                 "Schema": s_avail if mode == "Availability" else s_price,
-            })
+            }
+
+            if mode == "Availability":
+                market_code = get_market_from_url(target_url)
+                v_avail_formatted = translate_status_with_format(raw_btn_text, market_code)
+                row_data["Visual_Standard"] = v_avail_formatted.split('(')[0].strip() if '(' in v_avail_formatted else v_avail_formatted
+                row_data["Visual_Full"] = v_avail_formatted
+            else:
+                row_data["Visual_Price"] = v_price
+
+            rows.append(row_data)
         except: continue
 
     st.session_state.analysis_df = pd.DataFrame(rows)
@@ -271,6 +279,7 @@ def start_process(cmd: List[str]) -> None:
     st.session_state.log_q = q
     st.session_state.lines = []
     st.session_state.started_at = time.time()
+    st.session_state.final_duration = None
     st.session_state.stdout_all = stdout_text = ""
     st.session_state.returncode = None
     st.session_state.realtime_results = []
@@ -318,6 +327,8 @@ def finalize_if_done() -> None:
     if not proc: return
     rc = proc.poll()
     if rc is None: return
+    if st.session_state.started_at:
+        st.session_state.final_duration = time.time() - float(st.session_state.started_at)
     st.session_state.returncode = rc
     st.session_state.running = False
     stdout_text = "\n".join(st.session_state.lines)
@@ -361,7 +372,7 @@ def render_realtime_results():
 
     if not groups and not st.session_state.running: return
 
-    st.markdown("### 📸 Audit Results")
+    st.markdown("### 2. Audit Result")
     if not groups and st.session_state.running:
         st.info("Waiting for first result...")
         return
@@ -369,7 +380,7 @@ def render_realtime_results():
     st.divider()
     for g in groups:
         rid = g.get("region_id") or ""
-        region_display = f"region_{rid}" if rid else "Default (No Param)"
+        region_display = f"region_{rid}" if rid else "Default"
         st.markdown(f"#### {region_display}")
         c_img, c_schema = st.columns([65, 35], gap="large")
         with c_img:
@@ -393,115 +404,136 @@ def render_realtime_results():
 # --- Main Layout ---
 col_t1, col_t2 = st.columns([0.85, 0.15])
 with col_t1: st.title("GMC Region Mismatch Audit Tool")
-left_col, right_col = st.columns([0.25, 0.75], gap="large")
 
-# === LEFT COLUMN: Controls ===
+# [4:6 Ratio]
+left_col, right_col = st.columns([0.35, 0.65], gap="large")
+
+# === LEFT COLUMN: Controls & Post-Audit ===
 with left_col:
-    st.subheader("1. Input Data")
+    st.subheader("1. Start Audit")
     blob = st.text_area("Blob/URL", height=200, disabled=st.session_state.running)
     
     b1, b2 = st.columns(2)
     with b1: run_btn = st.button("Run Audit", type="primary", use_container_width=True, disabled=st.session_state.running)
     with b2: stop_btn = st.button("Stop", use_container_width=True, disabled=not st.session_state.running)
     
-    status_container = st.empty()
+    # Status Box
+    if st.session_state.running:
+        status_text = st.session_state.get("status_text", "Starting...")
+        p_val = st.session_state.get("progress_val", 0.0)
+        p_label = st.session_state.get("progress_label", "Running...")
+        elapsed = 0.0
+        if st.session_state.started_at:
+            elapsed = time.time() - float(st.session_state.started_at)
 
-    # [NEW] Post-Audit Input Section (Visible only if Audit Data Exists)
+        st.markdown(f"""
+        <div class="status-box status-running">
+            <div class="status-header"><span class="rotating-icon">⏳</span>{p_label}</div>
+            <div class="status-text">{status_text}</div>
+            <div class="time-text">Time: {elapsed:.1f}s</div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.progress(p_val)
+
+    elif st.session_state.returncode is not None and st.session_state.returncode == 0:
+        final_t = st.session_state.get("final_duration", 0.0)
+        st.markdown(f"""
+        <div class="status-box status-done">
+            <div class="status-header">✅ Done</div>
+            <div class="status-text">Audit completed successfully.</div>
+            <div class="time-text">Total Time: {final_t:.1f}s</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    elif st.session_state.returncode is not None and st.session_state.returncode != 0:
+        st.markdown(f"""
+        <div class="status-box status-failed">
+            <div class="status-header">❌ Failed</div>
+            <div class="status-text">Process terminated with error code {st.session_state.returncode}.</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+    # [Post-Audit Input Section]
     schema_dir = st.session_state.get("schema_dir")
-    # 실행 중이 아니고, 결과 디렉토리가 있을 때만 표시
     if not st.session_state.running and schema_dir:
         st.markdown("---")
-        st.subheader("2. Post-Audit Settings")
+        st.subheader("3. Comparison Table")
         
         with st.container():
             st.markdown("""<div class="analysis-container">""", unsafe_allow_html=True)
             
             audit_mode = st.radio("Comparision Mode", ["Price", "Availability"], horizontal=True)
             
-            # Default Value
             blob_info = extract_info_from_blob(st.session_state.get("saved_blob", ""))
             auto_val = blob_info["price"] if audit_mode == "Price" else blob_info["availability"]
             default_gmc = st.text_input("Default GMC Value", value=auto_val)
             
-            # Regional Inventory
             regional_text = ""
             if audit_mode == "Availability":
                 regional_text = st.text_area("Regional Inventory (Paste from GMC)", height=150, placeholder="Paste data here...")
             
             st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
             
-            # Generate Button (Left Side)
             if st.button("Generate Table", type="primary", use_container_width=True):
                 run_post_audit_internal(st.session_state.get("schema_dir"), audit_mode, default_gmc, regional_text)
             
-            st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True) # End of analysis container
+
+        # [Analysis Table Section]
+        if st.session_state.analysis_df is not None:
+            
+            c_sp1, c_sp2, c_chk, c_sp3 = st.columns([1, 1, 2, 1])
+            
+            show_original = False
+            is_avail_mode = "Visual_Full" in st.session_state.analysis_df.columns
+            
+            if is_avail_mode:
+                with c_chk:
+                    show_original = st.checkbox("Show Original LG.com", value=False)
+
+            df_display = st.session_state.analysis_df.copy()
+            
+            if is_avail_mode:
+                if show_original:
+                    df_display['LG.com'] = df_display['Visual_Full']
+                else:
+                    df_display['LG.com'] = df_display['Visual_Standard']
+            else:
+                df_display['LG.com'] = df_display['Visual_Price']
+
+            df_display = df_display[["Region", "GMC", "LG.com", "Schema"]]
+
+            def highlight_mismatch(row):
+                gmc = str(row.get('GMC', '')).strip().lower()
+                vis_full = str(row.get('LG.com', '')).strip()
+                vis_std = vis_full.split('(')[0].strip().lower()
+                
+                if gmc and vis_std and (gmc != vis_std):
+                    return ['background-color: #ffe6e6; color: #b30000'] * len(row)
+                return [''] * len(row)
+
+            st.dataframe(
+                df_display.style.apply(highlight_mismatch, axis=1), 
+                use_container_width=True, 
+                hide_index=True
+            )
+            
+            st.download_button(
+                "📄 Download Result Report", 
+                generate_standalone_html(st.session_state.realtime_results, st.session_state.target_url, st.session_state.target_product_id),
+                f"audit_report.html", 
+                "text/html",
+                use_container_width=True,
+                type="secondary"
+            )
 
 
-# === RIGHT COLUMN: Results ===
+# === RIGHT COLUMN: Results Only ===
 with right_col:
     result_area = st.container()
-    
-    # 1. Real-time Crawl Results
     with result_area:
         render_realtime_results()
-
-    # 2. Post-Audit Table (Visible only if DataFrame exists)
-    if st.session_state.analysis_df is not None:
-        st.markdown("### 📊 Analysis Table")
-        
-        # Checkbox Layout (Above Table)
-        c_sp1, c_sp2, c_chk, c_sp3 = st.columns([1, 1, 2, 1])
-        
-        show_original = False
-        if "Availability" in str(st.session_state.get("analysis_df", "")): # Check mode roughly or pass it
-             pass 
-        
-        # Mode를 session state에 저장하지 않았으므로, 데이터프레임 컬럼으로 유추하거나
-        # 위쪽 radio button 값은 rerun 되어야 알 수 있음.
-        # 심플하게: Visual_Full 컬럼이 있으면 Availability 모드임.
-        is_avail_mode = "Visual_Full" in st.session_state.analysis_df.columns
-        
-        if is_avail_mode:
-            with c_chk:
-                show_original = st.checkbox("Show Original Text", value=False)
-
-        # Display Data Preparation
-        df_display = st.session_state.analysis_df.copy()
-        
-        if is_avail_mode:
-            if show_original:
-                df_display['LG.com (Visual)'] = df_display['Visual_Full']
-            else:
-                df_display['LG.com (Visual)'] = df_display['Visual_Standard']
-        else:
-            df_display['LG.com (Visual)'] = df_display['Visual_Price']
-
-        df_display = df_display[["Region", "GMC", "LG.com (Visual)", "Schema"]]
-
-        # Highlighting
-        def highlight_mismatch(row):
-            gmc = str(row.get('GMC', '')).strip().lower()
-            vis_full = str(row.get('LG.com (Visual)', '')).strip()
-            # 괄호 앞부분만 추출 (표준값)
-            vis_std = vis_full.split('(')[0].strip().lower()
-            
-            if gmc and vis_std and (gmc != vis_std):
-                return ['background-color: #ffe6e6; color: #b30000'] * len(row)
-            return [''] * len(row)
-
-        st.dataframe(
-            df_display.style.apply(highlight_mismatch, axis=1), 
-            use_container_width=True, 
-            hide_index=True
-        )
-        
-        # Download Button (Bottom Right)
-        st.download_button(
-            "📄 Download Result Report", 
-            generate_standalone_html(st.session_state.realtime_results, st.session_state.target_url, st.session_state.target_product_id),
-            f"audit_report.html", 
-            "text/html"
-        )
 
 
 # === Logic Execution ===
@@ -536,17 +568,8 @@ was_running = st.session_state.running
 drain_logs()
 finalize_if_done()
 
-# Status Bar Update (Left)
-if st.session_state.running:
-    status_text = st.session_state.get("status_text", "Starting...")
-    p_val = st.session_state.get("progress_val", 0.0)
-    with status_container.container():
-        st.markdown(f"""<div class="status-box"><div class="status-header"><span class="rotating-icon">⏳</span><b>Running...</b></div><div class="status-text">{status_text}</div></div>""", unsafe_allow_html=True)
-        st.progress(p_val)
-else:
-    rc = st.session_state.get("returncode")
-    if rc == 0: status_container.success("Done")
-    elif rc is not None: status_container.error("Failed")
-
-if st.session_state.running: time.sleep(0.5); st.rerun()
-elif was_running: st.rerun()
+if st.session_state.running: 
+    time.sleep(0.5)
+    st.rerun()
+elif was_running: 
+    st.rerun()
