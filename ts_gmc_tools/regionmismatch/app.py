@@ -6,12 +6,17 @@ import threading
 import subprocess
 import shutil
 import base64
+import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import streamlit as st
 import pandas as pd
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import re
+import scheduler
+
+
+scheduler.cleanup_old_folders()
 
 st.set_page_config(page_title="GMC Region Mismatch Audit Tool", layout="wide")
 
@@ -61,7 +66,7 @@ st.markdown("""
     .status-header { display: flex; align-items: center; margin-bottom: 8px; font-weight: 600; font-size: 1rem; }
     .status-text { font-size: 0.9rem; color: #444; word-break: break-word; }
     .time-text { font-size: 0.85rem; color: #666; margin-top: 5px; font-family: monospace; }
-    .analysis-container { margin-top: 20px; padding: 15px; border: 1px solid #e0e0e0; border-radius: 10px; background-color: #f8f9fa; }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -118,14 +123,47 @@ def extract_info_from_blob(blob_text):
     info["price"] = clean_currency(raw_price)
     return info
 
-def generate_standalone_html(groups, target_url, target_pid):
-    html_parts = [f"<html><body><h1>Result for {target_pid}</h1>"]
-    for g in groups:
-        html_parts.append(f"<div>{g.get('region_id')}</div>")
-    html_parts.append("</body></html>")
-    return "\n".join(html_parts)
+def generate_standalone_html(df, groups, target_url, target_pid):
+    css = """
+    <style>
+        body { font-family: sans-serif; padding: 20px; line-height: 1.6; }
+        .section { margin-bottom: 40px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 13px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f8f9fa; font-weight: 600; }
+        .mismatch { background-color: #ffe6e6 !important; color: #b30000; font-weight: bold; }
+        .link-box { background: #f1f3f4; padding: 10px; border-radius: 5px; margin-top: 5px; font-family: monospace; font-size: 12px; word-break: break-all; }
+        .header-info { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 30px; border: 1px solid #eee; }
+        h2 { border-left: 5px solid #d93025; padding-left: 10px; color: #333; }
+    </style>
+    """
+    html = [f"<html><head><meta charset='utf-8'>{css}</head><body>"]
+    html.append(f"<h1>Audit Report</h1>")
+    html.append(f"<div class='header-info'><p><b>PRODUCT ID:</b> {target_pid}</p><p><b>PRODUCT LINK:</b> <a href='{target_url}'>{target_url}</a></p><p><b>RUNNED AT:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p></div>")
+    
+    if df is not None:
+        html.append("<div class='section'><h2>1. Comparison Table</h2>")
+        html.append("<table><thead><tr><th>Region</th><th>GMC</th><th>LG.com</th><th>Schema</th></tr></thead><tbody>")
+        for _, row in df.iterrows():
+            gmc = str(row.get('GMC', '')).strip().lower()
+            lg_v = str(row.get('LG.com', '')).strip()
+            lg_std = lg_v.split('(')[0].strip().lower()
+            row_class = ' class="mismatch"' if gmc and lg_std and (gmc != lg_std) else ""
+            html.append(f"<tr{row_class}><td>{row.get('Region','')}</td><td>{row.get('GMC','')}</td><td>{lg_v}</td><td>{row.get('Schema','')}</td></tr>")
+        html.append("</tbody></table></div>")
 
-# --- Translation & Parsing Helpers (Internal) ---
+    html.append("<div class='section'><h2>2. Regional Details & Links</h2>")
+    for g in groups:
+        rid = g.get("region_id") or "Default"
+        lnk = g.get("final_url", "N/A")
+        html.append(f"<div style='margin-bottom:20px; padding-bottom:10px; border-bottom:1px solid #eee;'>")
+        html.append(f"<b>📍 Region: {rid}</b>")
+        if lnk != "N/A": 
+            html.append(f"<div class='link-box'>🔗 <a href='{lnk}' target='_blank'>{lnk}</a></div>")
+        html.append("</div>")
+    html.append("</div></body></html>")
+    return "\n".join(html)
+
 def get_market_from_url(url):
     try:
         match = re.search(r'lg\.com/([a-z]{2}(?:_[a-z]{2})?)/', url)
@@ -135,29 +173,24 @@ def get_market_from_url(url):
 
 def translate_status_with_format(text, market):
     if not text: return ""
-    
     trans_map = {}
     if TRANS_FILE.exists():
         try:
             trans_map = json.loads(TRANS_FILE.read_text(encoding="utf-8"))
         except: pass
-    
     text_clean = " ".join(text.split()).lower()
-    
     found_status = None
     market_rules = trans_map.get("market_map", {}).get(market, {})
     for k, v in market_rules.items():
         if k in text_clean: 
             found_status = v
             break
-            
     if not found_status:
         global_rules = trans_map.get("global_map", {})
         for k, v in global_rules.items():
             if k in text_clean: 
                 found_status = v
                 break
-    
     if found_status:
         return f"{found_status} ({text})"
     else:
@@ -170,27 +203,21 @@ def normalize_gmc_status(val):
     if "pre" in v: return "PreOrder"
     return val
 
-# --- [Internal] Post-Audit Logic ---
 def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
     schema_dir = Path(schema_dir_str)
     if not schema_dir.exists():
         st.error("Schema directory missing.")
         return
-
-    # 1. Parse Regional Text
     regional_map = {}
     if regional_text:
         raw_text = regional_text.replace("\t", "\n").replace("\r", "\n")
         lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
-        
         current_key = None
         for line in lines:
             if "KST" in line or "GMT" in line or "AM" in line or "PM" in line or re.search(r'\d{2}:\d{2}', line):
                 continue
-
             l_lower = line.lower()
             is_status = any(k in l_lower for k in ["in stock", "out of stock", "instock", "outofstock", "limited", "preorder"])
-            
             if is_status:
                 if current_key:
                     std_val = normalize_gmc_status(line)
@@ -198,55 +225,42 @@ def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
                     current_key = None
             else:
                 current_key = line
-
-    # 2. Files & Data Aggregation
     rows = []
     files = sorted(schema_dir.glob("*__schema_*.json"))
-    
     for json_file in files:
         try:
             fname = json_file.name
             parts = fname.split("__")
             if len(parts) < 2: continue
-            
             region_part = parts[0]
             rid = region_part.replace("region_", "")
-            
             display_rid = rid
             lookup_key = rid
             if rid == "default":
                 display_rid = "Default"
                 lookup_key = ""
-
             schema_data = safe_read_json(json_file)
             offers = schema_data.get("offers", {})
             if isinstance(offers, list): offers = offers[0] if offers else {}
-            
             s_price = clean_currency(offers.get("price", ""))
             s_avail = offers.get("availability", "").replace("https://schema.org/", "")
-
             scrape_fname = fname.replace("__schema_", "__scrape_")
             scrape_file = json_file.parent / scrape_fname
             visual_data = safe_read_json(scrape_file) if scrape_file.exists() else {}
-            
             v_price = visual_data.get("visual_price", "")
             raw_btn_text = visual_data.get("buy_button_text", "")
             target_url = visual_data.get("meta_url", "")
-
-            # Determine GMC Value
             gmc_val = normalize_gmc_status(default_gmc)
             if lookup_key:
                 for k, v in regional_map.items():
                     if k.lower() == lookup_key.lower():
                         gmc_val = v
                         break
-            
             row_data = {
                 "Region": display_rid,
                 "GMC": gmc_val,
                 "Schema": s_avail if mode == "Availability" else s_price,
             }
-
             if mode == "Availability":
                 market_code = get_market_from_url(target_url)
                 v_avail_formatted = translate_status_with_format(raw_btn_text, market_code)
@@ -254,10 +268,8 @@ def run_post_audit_internal(schema_dir_str, mode, default_gmc, regional_text):
                 row_data["Visual_Full"] = v_avail_formatted
             else:
                 row_data["Visual_Price"] = v_price
-
             rows.append(row_data)
         except: continue
-
     st.session_state.analysis_df = pd.DataFrame(rows)
 
 
@@ -324,16 +336,14 @@ def drain_logs() -> None:
 
 def finalize_if_done() -> None:
     proc = st.session_state.get("proc")
-    if not proc: return
-    rc = proc.poll()
-    if rc is None: return
-    if st.session_state.started_at:
-        st.session_state.final_duration = time.time() - float(st.session_state.started_at)
-    st.session_state.returncode = rc
-    st.session_state.running = False
-    stdout_text = "\n".join(st.session_state.lines)
-    st.session_state.stdout_all = stdout_text
-    st.session_state.report_path, st.session_state.images_dir, st.session_state.schema_dir = parse_report_paths(stdout_text)
+    if proc and proc.poll() is not None:
+        if st.session_state.started_at:
+            st.session_state.final_duration = time.time() - float(st.session_state.started_at)
+        st.session_state.returncode = proc.poll()
+        st.session_state.running = False
+        stdout_text = "\n".join(st.session_state.lines)
+        st.session_state.stdout_all = stdout_text
+        st.session_state.report_path, st.session_state.images_dir, st.session_state.schema_dir = parse_report_paths(stdout_text)
 
 # --- Recover Results ---
 def reload_results_from_disk():
@@ -342,7 +352,6 @@ def reload_results_from_disk():
     schema_dir = Path(schema_dir_str)
     if not schema_dir.exists(): return
     if st.session_state.realtime_results: return
-    
     recovered = []
     for f in sorted(schema_dir.glob("*__schema_*.json")):
         try:
@@ -365,23 +374,35 @@ def reload_results_from_disk():
 def render_realtime_results():
     if not st.session_state.running and not st.session_state.realtime_results:
         reload_results_from_disk()
-
     groups = st.session_state.get("realtime_results", [])
-    target_pid = st.session_state.get("target_product_id", "N/A")
-    target_url = st.session_state.get("target_url", "")
-
     if not groups and not st.session_state.running: return
-
+    
     st.markdown("### 2. Audit Result")
+    
+    # [수정] 2. Audit Result 바로 아래 정보 박스 추가
+    if st.session_state.target_product_id:
+        st.markdown(f"""
+        <div class="audit-info-box">
+            <p><b>PRODUCT ID:</b> {st.session_state.target_product_id}</p>
+            <p><b>PRODUCT LINK:</b> <a href='{st.session_state.target_url}' target='_blank'>{st.session_state.target_url}</a></p>
+            <p><b>RUNNED AT:</b> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
     if not groups and st.session_state.running:
         st.info("Waiting for first result...")
         return
-
     st.divider()
     for g in groups:
         rid = g.get("region_id") or ""
         region_display = f"region_{rid}" if rid else "Default"
+        lnk = g.get("final_url", "#")
         st.markdown(f"#### {region_display}")
+        
+        # [수정] 각 리전 제목 아래 개별 링크 표시
+        if lnk != "#":
+            st.markdown(f" {lnk}")
+            
         c_img, c_schema = st.columns([65, 35], gap="large")
         with c_img:
             schema_path = g.get("schema_path_abs", "")
@@ -405,161 +426,88 @@ def render_realtime_results():
 col_t1, col_t2 = st.columns([0.85, 0.15])
 with col_t1: st.title("GMC Region Mismatch Audit Tool")
 
-# [4:6 Ratio]
 left_col, right_col = st.columns([0.35, 0.65], gap="large")
 
-# === LEFT COLUMN: Controls & Post-Audit ===
 with left_col:
     st.subheader("1. Start Audit")
     blob = st.text_area("Blob/URL", height=200, disabled=st.session_state.running)
-    
     b1, b2 = st.columns(2)
-    with b1: run_btn = st.button("Run Audit", type="primary", use_container_width=True, disabled=st.session_state.running)
-    with b2: stop_btn = st.button("Stop", use_container_width=True, disabled=not st.session_state.running)
+    run_btn = b1.button("Run Audit", type="primary", use_container_width=True, disabled=st.session_state.running)
+    stop_btn = b2.button("Stop", use_container_width=True, disabled=not st.session_state.running)
     
-    # Status Box
     if st.session_state.running:
         status_text = st.session_state.get("status_text", "Starting...")
         p_val = st.session_state.get("progress_val", 0.0)
         p_label = st.session_state.get("progress_label", "Running...")
-        elapsed = 0.0
-        if st.session_state.started_at:
-            elapsed = time.time() - float(st.session_state.started_at)
-
-        st.markdown(f"""
-        <div class="status-box status-running">
-            <div class="status-header"><span class="rotating-icon">⏳</span>{p_label}</div>
-            <div class="status-text">{status_text}</div>
-            <div class="time-text">Time: {elapsed:.1f}s</div>
-        </div>
-        """, unsafe_allow_html=True)
+        elapsed = time.time() - float(st.session_state.started_at) if st.session_state.started_at else 0
+        st.markdown(f'<div class="status-box status-running"><div class="status-header"><span class="rotating-icon">⏳</span>{p_label}</div><div class="status-text">{status_text}</div><div class="time-text">Time: {elapsed:.1f}s</div></div>', unsafe_allow_html=True)
         st.progress(p_val)
-
-    elif st.session_state.returncode is not None and st.session_state.returncode == 0:
+    elif st.session_state.returncode == 0:
         final_t = st.session_state.get("final_duration", 0.0)
-        st.markdown(f"""
-        <div class="status-box status-done">
-            <div class="status-header">✅ Done</div>
-            <div class="status-text">Audit completed successfully.</div>
-            <div class="time-text">Total Time: {final_t:.1f}s</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f'<div class="status-box status-done"><div class="status-header">✅ Done</div><div class="status-text">Audit completed successfully.</div><div class="time-text">Total Time: {final_t:.1f}s</div></div>', unsafe_allow_html=True)
 
-    elif st.session_state.returncode is not None and st.session_state.returncode != 0:
-        st.markdown(f"""
-        <div class="status-box status-failed">
-            <div class="status-header">❌ Failed</div>
-            <div class="status-text">Process terminated with error code {st.session_state.returncode}.</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-    # [Post-Audit Input Section]
     schema_dir = st.session_state.get("schema_dir")
     if not st.session_state.running and schema_dir:
         st.markdown("---")
         st.subheader("3. Comparison Table")
-        
         with st.container():
             st.markdown("""<div class="analysis-container">""", unsafe_allow_html=True)
-            
-            audit_mode = st.radio("Comparision Mode", ["Price", "Availability"], horizontal=True)
-            
+            audit_mode = st.radio("", ["Price", "Availability"], horizontal=True, label_visibility="collapsed")
             blob_info = extract_info_from_blob(st.session_state.get("saved_blob", ""))
-            auto_val = blob_info["price"] if audit_mode == "Price" else blob_info["availability"]
-            default_gmc = st.text_input("Default GMC Value", value=auto_val)
-            
-            regional_text = ""
-            if audit_mode == "Availability":
-                regional_text = st.text_area("Regional Inventory (Paste from GMC)", height=150, placeholder="Paste data here...")
-            
+            default_gmc = st.text_input("Default GMC Value", value=blob_info["price"] if audit_mode == "Price" else blob_info["availability"])
+            regional_text = st.text_area("Regional Inventory (Paste from GMC)", height=150, placeholder="Paste data here...") if audit_mode == "Availability" else ""
             st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-            
             if st.button("Generate Table", type="primary", use_container_width=True):
                 run_post_audit_internal(st.session_state.get("schema_dir"), audit_mode, default_gmc, regional_text)
-            
-            st.markdown("</div>", unsafe_allow_html=True) # End of analysis container
+            st.markdown("</div>", unsafe_allow_html=True)
 
-        # [Analysis Table Section]
         if st.session_state.analysis_df is not None:
-            
-            c_sp1, c_sp2, c_chk, c_sp3 = st.columns([1, 1, 2, 1])
-            
-            show_original = False
+            t_col1, t_col2 = st.columns([1, 1])
             is_avail_mode = "Visual_Full" in st.session_state.analysis_df.columns
-            
-            if is_avail_mode:
-                with c_chk:
-                    show_original = st.checkbox("Show Original LG.com", value=False)
-
+            show_original = t_col2.checkbox("Show Original LG.com", value=False) if is_avail_mode else False
             df_display = st.session_state.analysis_df.copy()
-            
             if is_avail_mode:
-                if show_original:
-                    df_display['LG.com'] = df_display['Visual_Full']
-                else:
-                    df_display['LG.com'] = df_display['Visual_Standard']
+                df_display['LG.com'] = df_display['Visual_Full'] if show_original else df_display['Visual_Standard']
             else:
                 df_display['LG.com'] = df_display['Visual_Price']
-
             df_display = df_display[["Region", "GMC", "LG.com", "Schema"]]
-
             def highlight_mismatch(row):
                 gmc = str(row.get('GMC', '')).strip().lower()
                 vis_full = str(row.get('LG.com', '')).strip()
                 vis_std = vis_full.split('(')[0].strip().lower()
-                
-                if gmc and vis_std and (gmc != vis_std):
-                    return ['background-color: #ffe6e6; color: #b30000'] * len(row)
-                return [''] * len(row)
-
-            st.dataframe(
-                df_display.style.apply(highlight_mismatch, axis=1), 
-                use_container_width=True, 
-                hide_index=True
-            )
+                return ['background-color: #ffe6e6; color: #b30000'] * len(row) if gmc and vis_std and (gmc != vis_std) else [''] * len(row)
+            st.dataframe(df_display.style.apply(highlight_mismatch, axis=1), use_container_width=True, hide_index=True)
             
+            ts_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             st.download_button(
                 "📄 Download Result Report", 
-                generate_standalone_html(st.session_state.realtime_results, st.session_state.target_url, st.session_state.target_product_id),
-                f"audit_report.html", 
+                generate_standalone_html(df_display, st.session_state.realtime_results, st.session_state.target_url, st.session_state.target_product_id),
+                f"audit_report_{st.session_state.target_product_id}_{ts_str}.html", 
                 "text/html",
                 use_container_width=True,
                 type="secondary"
             )
 
-
-# === RIGHT COLUMN: Results Only ===
 with right_col:
-    result_area = st.container()
-    with result_area:
-        render_realtime_results()
+    render_realtime_results()
 
-
-# === Logic Execution ===
+# Logic Execution
 if run_btn:
-    result_area.empty()
     st.session_state.analysis_df = None
     st.session_state.saved_blob = blob
-    if not SCRIPT.exists(): st.stop()
-    cmd = [sys.executable, str(SCRIPT), "--no_open"]
-    
     final_url = ""
     lines = [l.strip() for l in blob.splitlines() if l.strip()]
     for l in lines:
         if l.startswith("http"): final_url = l
     if not final_url: st.error("URL not found"); st.stop()
-    
     final_pid = ""
     for i, l in enumerate(lines):
         if l.lower() == "product id" and i+1 < len(lines): final_pid = lines[i+1]
-
-    cmd += ["--url", final_url]
-    if final_pid: cmd += ["--product_id", final_pid]
-    if "product page" in blob.lower(): cmd += ["--blob", blob]
-    
     st.session_state.target_product_id = final_pid
     st.session_state.target_url = final_url
+    cmd = [sys.executable, str(SCRIPT), "--no_open", "--url", final_url]
+    if final_pid: cmd += ["--product_id", final_pid]
+    if "product page" in blob.lower(): cmd += ["--blob", blob]
     start_process(cmd)
 
 if stop_btn: stop_process()
