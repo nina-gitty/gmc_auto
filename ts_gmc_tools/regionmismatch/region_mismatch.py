@@ -248,35 +248,19 @@ def main():
     region_blocks = []
 
     with sync_playwright() as p:
-        # [Headless=False + XVFB 조합]
+        # [봇 차단 해결 정공법 적용]
         browser = p.chromium.launch(
             headless=False,
-            args=[
-                '--no-sandbox', 
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
-                '--disable-gpu',
-                '--window-size=1920,1080',
-                '--disable-blink-features=AutomationControlled'
-            ]
+            args=["--disable-blink-features=AutomationControlled"]
         )
         
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            locale='en-US',
-            extra_http_headers={'Accept-Language': 'en-US,en;q=0.9'}
+            locale='en-US'
         )
         
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'platform', {get: () => 'Win32'});
-        """)
-        
+        # 추가적인 위장 스크립트 없이 깨끗한 상태 유지
         page = context.new_page()
 
         total = len(target_regions)
