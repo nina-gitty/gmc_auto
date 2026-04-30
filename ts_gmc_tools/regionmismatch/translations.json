@@ -2,6 +2,7 @@
   "market_map": {
     "de": { "info wenn verfügbar": "OutOfStock", "jetzt kaufen": "InStock", "vorbestellung": "PreOrder" },
     "at": { "jetzt kaufen": "InStock", "ausverkauft": "OutOfStock" },
+    "au": { "reserve now": "BackOrder" },
     "ch_de": { "jetzt kaufen": "InStock", "ausverkauft": "OutOfStock", "vorbestellung": "PreOrder" },
     "fr": { "obtenir une alerte de stock": "OutOfStock", "acheter maintenant": "InStock", "précommande": "PreOrder" },
     "ca_fr": { "obtenir une alerte de stock": "OutOfStock", "acheter maintenant": "InStock", "précommande": "PreOrder", "backorder": "BackOrder" },

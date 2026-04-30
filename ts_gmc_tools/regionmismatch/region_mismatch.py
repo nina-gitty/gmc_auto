@@ -203,7 +203,7 @@ def extract_visual_elements(page, log_prefix: str, current_url: str) -> Dict[str
             hl_btn = page.locator('.cta-wrap .highlight:visible').first
             if hl_btn.count() > 0: found_text = hl_btn.inner_text().strip()
         if not found_text:
-            fallback_kws = ["out of stock", "sold out", "esgotado", "unavailable", "stock alert", "where to buy", "comprar", "buy now", "add to cart", "in stock", "pre-order", "vorbestellung", "beli sekarang"]
+            fallback_kws = ["out of stock", "sold out", "esgotado", "unavailable", "stock alert", "where to buy", "comprar", "buy now", "add to cart", "in stock", "pre-order", "reserve now", "vorbestellung", "beli sekarang"]
             for kw in fallback_kws:
                 if page.get_by_text(kw, exact=False).first.is_visible():
                     found_text = kw.title()
@@ -238,7 +238,8 @@ def main():
     if "" not in target_regions: target_regions.insert(0, "") 
     param_key = args.param if args.param else auto_param
 
-    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # [수정] 밀리초까지 포함하여 폴더 이름 충돌 방지
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     out_dir = script_dir / "outs" / f"out_{run_ts}"
     img_dir = out_dir / "images"
     schema_dir = out_dir / "schema"
