@@ -252,6 +252,26 @@ def main():
 
     region_blocks = []
 
+    # [Task 5] 일관성 있는 랜덤 프로필 리스트 (UA + Client Hints 매칭)
+    BROWSER_PROFILES = [
+        {
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "sec_ch_ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"'
+        },
+        {
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "sec_ch_ua": '"Chromium";v="123", "Google Chrome";v="123", "Not-A.Brand";v="99"'
+        },
+        {
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "sec_ch_ua": '"Chromium";v="122", "Google Chrome";v="122", "Not-A.Brand";v="99"'
+        },
+        {
+            "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "sec_ch_ua": '"Chromium";v="121", "Google Chrome";v="121", "Not-A.Brand";v="99"'
+        }
+    ]
+
     with sync_playwright() as p:
         # [봇 차단 해결 정공법 적용]
         launch_kwargs = {
@@ -268,13 +288,16 @@ def main():
         
         total = len(target_regions)
         for i, rid in enumerate(target_regions, 1):
+            # [Task 5] 매 세션마다 프로필 랜덤 선택 (일관성 유지)
+            profile = random.choice(BROWSER_PROFILES)
+            
             # Create fresh context for each region to avoid session tracking
             context = browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                user_agent=profile["ua"],
                 locale='en-US',
                 extra_http_headers={
-                    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                    "sec-ch-ua": profile["sec_ch_ua"],
                     "sec-ch-ua-mobile": "?0",
                     "sec-ch-ua-platform": '"Windows"',
                     "Upgrade-Insecure-Requests": "1",
