@@ -10,7 +10,7 @@ import time
 import random
 
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
 
 # 윈도우/리눅스 출력 인코딩 강제 설정
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
@@ -309,7 +309,9 @@ def main():
                 }
             )
             page = context.new_page()
-            stealth_sync(page)
+            # [Task 1] Stealth 적용 (v2.0.3 API 대응)
+            stealth_obj = Stealth()
+            stealth_obj.apply_stealth_sync(page)
 
             target_url = set_query_param(final_main_url, param_key, rid)
             region_tag = rid if rid else "default"
