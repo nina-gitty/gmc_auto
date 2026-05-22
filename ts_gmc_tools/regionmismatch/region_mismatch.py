@@ -10,6 +10,7 @@ import time
 import random
 
 from playwright.sync_api import sync_playwright
+from playwright_stealth import stealth_sync
 
 # 윈도우/리눅스 출력 인코딩 강제 설정
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
@@ -263,6 +264,7 @@ def main():
         
         # 추가적인 위장 스크립트 없이 깨끗한 상태 유지
         page = context.new_page()
+        stealth_sync(page)
 
         total = len(target_regions)
         for i, rid in enumerate(target_regions, 1):
