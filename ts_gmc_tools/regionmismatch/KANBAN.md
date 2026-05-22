@@ -5,8 +5,8 @@
 | Status | Task | Description |
 | :--- | :--- | :--- |
 | ✅ **Done** | **Task 1: Stealth Mode Activation** | Integrate `playwright-stealth` to hide automation markers. |
-| 🚀 **In Progress** | **Task 2: Header Optimization** | Implement modern Chrome headers (sec-ch-ua) and randomization. |
-| 🕒 Backlog | **Task 3: Proxy Support Structure** | Add CLI arguments and logic for proxy integration. |
+| ✅ **Done** | **Task 2: Header Optimization** | Implement modern Chrome headers (sec-ch-ua) and randomization. |
+| 🚀 **In Progress** | **Task 3: Proxy Support Structure** | Add CLI arguments and logic for proxy integration. |
 | 🕒 Backlog | **Task 4: Session Isolation** | Refactor to use fresh browser contexts for each region request. |
 
 ---
