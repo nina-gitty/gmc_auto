@@ -228,6 +228,9 @@ def main():
     ap.add_argument("--param", default="")
     ap.add_argument("--headed", action="store_true")
     ap.add_argument("--no_open", action="store_true")
+    ap.add_argument("--proxy_server", default="")
+    ap.add_argument("--proxy_user", default="")
+    ap.add_argument("--proxy_pass", default="")
     args = ap.parse_args()
 
     blob_pid, blob_url = parse_product_blob(args.blob)
@@ -251,10 +254,17 @@ def main():
 
     with sync_playwright() as p:
         # [봇 차단 해결 정공법 적용]
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
+        launch_kwargs = {
+            "headless": False,
+            "args": ["--disable-blink-features=AutomationControlled"]
+        }
+        if args.proxy_server:
+            launch_kwargs["proxy"] = {"server": args.proxy_server}
+            if args.proxy_user:
+                launch_kwargs["proxy"]["username"] = args.proxy_user
+                launch_kwargs["proxy"]["password"] = args.proxy_pass
+        
+        browser = p.chromium.launch(**launch_kwargs)
         
         context = browser.new_context(
             viewport={"width": 1920, "height": 1080},
